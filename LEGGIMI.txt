@@ -1,0 +1,7 @@
+La Labbrata – Magazzino Birre v2.0 QR
+Pubblicare i file della cartella su hosting HTTPS (es. GitHub Pages). Aprire l’URL da Chrome Android o Safari iPhone e autorizzare la fotocamera.
+Il lettore usa BarcodeDetector, se presente, e una libreria jsQR caricata da CDN quando disponibile (richiede connessione). Se nessuno dei decoder e disponibile, incollare il link QR manualmente.
+I dati restano salvati solo nel browser dello stesso dominio: esportare backup JSON prima della migrazione dalla versione precedente e importarlo sul nuovo sito. NON esiste sincronizzazione automatica tra telefoni.
+I QR riconosciuti aprono il modulo movimento; quelli nuovi aprono la creazione birra.
+
+Versione 2.1: nella sezione Impostazioni > Anagrafica birre puoi eliminare una birra. I movimenti storici rimangono consultabili e filtrabili. Prima di aggiornare, esporta un backup JSON.
