@@ -1,0 +1,9 @@
+LA LABBRATA – MAGAZZINO BIRRE | EDIZIONE AMICI (VUOTA)
+
+Avvio: apri index.html per la gestione manuale. Per usare lo scanner QR, pubblica TUTTI i file su un sito HTTPS (es. GitHub Pages) e consenti la fotocamera.
+
+Al primo utilizzo: zero birre e zero movimenti. Premi Nuova birra oppure Scansiona QR per creare la prima birra; in seguito usa i movimenti per caricare o scaricare bottiglie.
+
+I dati sono locali al browser e allo stesso indirizzo, NON sincronizzati fra dispositivi. Salva periodicamente un backup JSON da Impostazioni.
+
+Questa edizione usa un archivio diverso dalla versione personale già configurata per La Labbrata. Il comando Svuota tutto cancella le birre e lo storico solo in questa edizione.
