@@ -13,6 +13,7 @@ const firebaseConfig = {
 };
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
 const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let importPayload=null;
 let user=null, warehouse=null, warehouseId='', beers=[], moves=[], stopBeers=null, stopMoves=null, working=false, selectedBeer='', camera=null, scanTick=null, scannerBusy=false, detector=null;
 const locations={ 'zardelnord@gmail.com':'Zardelnord','lalabbrata@gmail.com':'La Labbrata'};
 const localStatus=s=>$('status').textContent=s;
@@ -56,3 +57,50 @@ $('scanBtn').onclick=async()=>{$('manualQR').value='';$('scanStatus').textConten
 async function scanFrame(){if(!scannerBusy)return;try{const v=$('video');if(v.readyState>=2){let raw='';if(detector){const codes=await detector.detect(v);raw=codes[0]?.rawValue||''}if(!raw&&window.jsQR){const c=$('canvas'),scale=Math.min(1,700/v.videoWidth);c.width=Math.max(1,Math.floor(v.videoWidth*scale));c.height=Math.max(1,Math.floor(v.videoHeight*scale));const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(v,0,0,c.width,c.height);const x=window.jsQR(ctx.getImageData(0,0,c.width,c.height).data,c.width,c.height);raw=x?.data||''}if(raw){$('scanDlg').close();resolveQR(raw);return}}}catch(err){$('scanStatus').textContent='Problema nella lettura: puoi incollare il link.'}scanTick=setTimeout(scanFrame,240)}
 function resolveQR(raw){const url=String(raw||'').trim();if(!safeUrl(url)){toast('Il QR non contiene un link https valido');return}const b=beers.find(x=>x.qr&&canon(x.qr)===canon(url));if(b){tab('Stock');openMove(b.id);toast('QR riconosciuto: '+b.name)}else if(confirm('QR non ancora registrato. Vuoi creare una nuova birra?'))openBeer('',url)}
 $('findQR').onclick=()=>{const raw=$('manualQR').value;$('scanDlg').close();resolveQR(raw)};
+
+// Importazione conservativa backup v2.1 → Firestore.
+const importFile=$('importFile'),previewButton=$('previewImport'),previewBox=$('importPreview'),confirmBox=$('importConfirmBox'),confirmInput=$('importConfirmInput'),confirmLabel=$('importConfirmLabel'),runImportButton=$('runImport'),importStatus=$('importStatus');
+function resetImport(){importPayload=null;previewBox.classList.add('hidden');confirmBox.classList.add('hidden');confirmInput.value='';runImportButton.disabled=true;importStatus.textContent=''}
+importFile.addEventListener('change',resetImport);
+function validateV2(data){
+ if(!data||data.version!==1||!Array.isArray(data.beers)||!Array.isArray(data.transactions))throw Error('Il file non è un backup JSON La Labbrata v2.1 valido.');
+ if(!data.beers.length)throw Error('Il backup non contiene birre.');
+ if(data.beers.length>200||data.transactions.length>250)throw Error('Backup troppo grande: contattaci per una migrazione divisa in blocchi.');
+ const ids=new Set(),txIds=new Set();
+ for(const b of data.beers){if(!b||typeof b.id!=='string'||!b.id||b.id.includes('/')||ids.has(b.id)||typeof b.name!=='string'||!b.name.trim()||b.name.length>90||!Number.isSafeInteger(b.qty)||b.qty<0||b.qty>999999||typeof b.qr!=='string'||(b.qr&&!safeUrl(b.qr)))throw Error('Una birra ha ID, quantità, nome o URL non valido.');ids.add(b.id)}
+ for(const t of data.transactions){if(!t||typeof t.id!=='string'||!t.id||t.id.includes('/')||txIds.has(t.id)||!['carico','consumo','vendita','regalo'].includes(t.type)||!Number.isSafeInteger(t.qty)||t.qty<1||t.qty>999999||!Number.isFinite(Date.parse(t.date))||typeof t.beerId!=='string')throw Error('Uno dei movimenti contiene dati non validi.');txIds.add(t.id)}
+ if(data.beers.length+data.transactions.length>400)throw Error('Limite scritture raggiunto.');
+ return {beers:data.beers,transactions:data.transactions};
+}
+previewButton.onclick=async()=>{
+ resetImport();try{
+  if(!user||!warehouseId)throw Error('Devi effettuare l’accesso.');
+  const file=importFile.files?.[0];if(!file)throw Error('Seleziona prima il file JSON.');if(file.size>1024*1024)throw Error('File troppo grande.');
+  const d=validateV2(JSON.parse(await file.text()));
+  if(beers.length)throw Error('Il magazzino contiene già '+beers.length+' birre. Per evitare duplicati, importa solo in un magazzino senza birre. Rimuovi prima le birre di prova, dopo aver salvato un backup.');
+  const sum=d.beers.reduce((a,b)=>a+b.qty,0), name=warehouseId;
+  importPayload={...d, target:warehouseId, uid:user.uid};
+  previewBox.classList.remove('hidden');
+  previewBox.innerHTML='<b>Destinazione: '+esc(name)+'</b><p>'+d.beers.length+' birre, '+sum+' bottiglie, '+d.transactions.length+' movimenti storici.</p><p>'+d.beers.map(b=>esc(b.name)+' ('+b.qty+')').join(' · ')+'</p><p class="bad">Operazione reale nel database condiviso. Non importare nello stesso magazzino due volte. Il backup non verrà eliminato dal tuo dispositivo.</p>';
+  confirmBox.classList.remove('hidden');confirmLabel.textContent='Per confermare, scrivi esattamente '+name;
+  confirmInput.value='';runImportButton.disabled=true;importStatus.textContent='Controlla la destinazione prima di confermare.';
+ }catch(err){importStatus.textContent='Importazione non disponibile: '+err.message}
+};
+confirmInput.oninput=()=>{runImportButton.disabled=!importPayload||confirmInput.value.trim()!==importPayload.target};
+runImportButton.onclick=async()=>{
+ if(!importPayload||confirmInput.value.trim()!==importPayload.target||warehouseId!==importPayload.target||user?.uid!==importPayload.uid)return;
+ runImportButton.disabled=true;previewButton.disabled=true;importStatus.textContent='Importazione in corso: non chiudere questa pagina…';
+ try{
+  const data=importPayload,beerColl=collection(db,'magazzini',warehouseId,'birre'),moveColl=collection(db,'magazzini',warehouseId,'movimenti');
+  // Una sola transazione: letture di controllo prima di tutte le scritture.
+  await runTransaction(db,async tx=>{
+   const refs=data.beers.map(b=>doc(beerColl,b.id));const txRefs=data.transactions.map(t=>doc(moveColl,t.id));
+   const found=await Promise.all([...refs,...txRefs].map(r=>tx.get(r)));
+   if(found.some(s=>s.exists()))throw Error('Almeno un ID è già presente nel database: importazione annullata per evitare doppioni.');
+   data.beers.forEach((b,i)=>tx.set(refs[i],{name:b.name,lot:b.lot||'',date:b.date||'',qr:b.qr||'',qty:b.qty,createdMs:Date.now(),importedFrom:'backup-v2.1'}));
+   data.transactions.forEach((t,i)=>tx.set(txRefs[i],{beerId:t.beerId,beerName:t.beerName||'',type:t.type,qty:t.qty,note:t.note||'',price:t.price??null,createdMs:Date.parse(t.date),dateOriginale:t.date,importedFrom:'backup-v2.1',operatorUid:user.uid}));
+  });
+  importStatus.textContent='Importazione completata ✓. Controlla quantità e storico, poi scarica un nuovo backup online.';
+  importPayload=null;confirmBox.classList.add('hidden');toast('Backup importato nel magazzino '+warehouseId+' ✓');
+ }catch(err){importStatus.textContent='Importazione non eseguita: '+err.message;runImportButton.disabled=false}finally{previewButton.disabled=false}
+};
