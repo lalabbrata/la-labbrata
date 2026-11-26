@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
-import { getFirestore, doc, collection, query, onSnapshot, getDoc, setDoc, updateDoc, deleteDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, EmailAuthProvider, reauthenticateWithCredential, deleteUser, signOut } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
+import { getFirestore, doc, collection, query, onSnapshot, getDoc, getDocs, setDoc, updateDoc, deleteDoc, writeBatch, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyC4KdInGBaDqWr_X0GLGw-uGlZhYpdhPYk',
@@ -23,6 +23,10 @@ const loading=(b,yes)=>{b.disabled=yes};
 function stopListeners(){if(stopBeers){stopBeers();stopBeers=null}if(stopMoves){stopMoves();stopMoves=null}beers=[];moves=[];warehouse=null;warehouseId=''}
 function showLogin(error=''){$('appView').classList.add('hidden');$('nav').classList.add('hidden');$('loginView').classList.remove('hidden');$('loginError').textContent=error}
 function showApp(){$('loginView').classList.add('hidden');$('appView').classList.remove('hidden');$('nav').classList.remove('hidden');tab('Stock')}
+// Elimina account: consentito soltanto ai magazzini personali generati dalla registrazione.
+function canDeletePersonalAccount(){return !!(user&&warehouse&&warehouseId==='personale_'+user.uid&&warehouse.ownerUid===user.uid&&warehouse.tipo==='privato')}
+function refreshDeletePanel(){const ok=canDeletePersonalAccount();$('openDeleteAccount').classList.toggle('hidden',!ok);$('deleteAccountUnavailable').classList.toggle('hidden',ok)}
+
 function tab(tabName){for(const name of ['Stock','History','Settings'])$('tab'+name).classList.toggle('hidden',name!==tabName);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tabName))}
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>tab(b.dataset.tab)));
 $('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent='';loading($('loginBtn'),true);try{await signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value)}catch(err){$('loginError').textContent='Accesso non riuscito. Controlla email, password e connessione.'}finally{loading($('loginBtn'),false)}};
@@ -62,7 +66,7 @@ onAuthStateChanged(auth,async u=>{
     await signOut(auth);showLogin('Accesso non autorizzato al magazzino. Controlla il proprietario in Firebase.');return;
   }
   warehouseId=chosen;warehouse=snap.data();$('warehouseTitle').textContent=warehouse.nome||chosen;$('subheading').textContent=warehouse.nome||chosen;
-  $('registerView').classList.add('hidden');showApp();localStatus('Connessione al magazzino…');
+  $('registerView').classList.add('hidden');showApp();refreshDeletePanel();localStatus('Connessione al magazzino…');
   stopBeers=onSnapshot(collection(db,'magazzini',warehouseId,'birre'),snapshot=>{beers=snapshot.docs.map(d=>({id:d.id,...d.data()}));beers.sort((a,b)=>String(a.name).localeCompare(String(b.name),'it'));render();localStatus('● Online · sincronizzazione attiva')},err=>localStatus('Errore lettura birre: '+err.message));
   stopMoves=onSnapshot(collection(db,'magazzini',warehouseId,'movimenti'),snapshot=>{moves=snapshot.docs.map(d=>({id:d.id,...d.data()}));moves.sort((a,b)=>(b.createdMs||0)-(a.createdMs||0));render()},err=>localStatus('Errore storico: '+err.message));
  }catch(err){$('registerView').classList.add('hidden');showLogin('Impossibile aprire il magazzino: '+(err.code||err.message)+' · Verifica che le regole Firestore v3.2 siano pubblicate.');}
@@ -134,4 +138,45 @@ runImportButton.onclick=async()=>{
   importStatus.textContent='Importazione completata ✓. Controlla quantità e storico, poi scarica un nuovo backup online.';
   importPayload=null;confirmBox.classList.add('hidden');toast('Backup importato nel magazzino '+warehouseId+' ✓');
  }catch(err){importStatus.textContent='Importazione non eseguita: '+err.message;runImportButton.disabled=false}finally{previewButton.disabled=false}
+};
+
+// Eliminazione definitiva dei soli account personali, con nuova autenticazione.
+$('openDeleteAccount').onclick=()=>{
+ if(!canDeletePersonalAccount()){alert('Questo magazzino non può essere eliminato dall’app.');return}
+ $('deleteAccountForm').reset();$('deleteAccountError').textContent='';$('deleteAccountEmail').textContent='Account: '+(user.email||'');
+ $('deleteAccountDialog').showModal();
+};
+$('cancelDeleteAccount').onclick=()=>$('deleteAccountDialog').close();
+$('deleteAccountForm').onsubmit=async e=>{
+ e.preventDefault();const error=$('deleteAccountError'),button=$('confirmDeleteAccount');error.textContent='';
+ if(!canDeletePersonalAccount()){error.textContent='Operazione non consentita per questo magazzino.';return}
+ if($('deleteAccountPhrase').value.trim()!=='ELIMINA'){error.textContent='Scrivi esattamente ELIMINA.';return}
+ if(!navigator.onLine){error.textContent='Serve una connessione Internet attiva.';return}
+ if(!confirm('Ultima conferma: eliminare definitivamente account, inventario e storico? Non potrai recuperarli.'))return;
+ const currentUser=user, id=warehouseId;
+ button.disabled=true;$('cancelDeleteAccount').disabled=true;
+ try{
+  const cred=EmailAuthProvider.credential(currentUser.email,$('deleteAccountPassword').value);
+  await reauthenticateWithCredential(currentUser,cred);
+  // Preveniamo cancellazioni del magazzino condiviso o di account preesistenti.
+  const warehouseRef=doc(db,'magazzini',id),snapshot=await getDoc(warehouseRef);
+  if(!snapshot.exists()||snapshot.data().ownerUid!==currentUser.uid||snapshot.data().tipo!=='privato'||id!=='personale_'+currentUser.uid)throw Error('Questo magazzino non è eliminabile automaticamente.');
+  error.textContent='Eliminazione delle birre e dello storico in corso. Non chiudere la pagina…';
+  // Firestore non elimina automaticamente le sottoraccolte: cancelliamole in blocchi.
+  for(const sub of ['birre','movimenti']){
+   const coll=collection(db,'magazzini',id,sub);
+   let docs=(await getDocs(coll)).docs;
+   while(docs.length){
+    for(let i=0;i<docs.length;i+=350){const batch=writeBatch(db);for(const d of docs.slice(i,i+350))batch.delete(d.ref);await batch.commit()}
+    docs=(await getDocs(coll)).docs;
+   }
+  }
+  await deleteDoc(warehouseRef);
+  error.textContent='Eliminazione account Firebase in corso…';
+  await deleteUser(currentUser);
+  stopListeners();user=null;$('deleteAccountDialog').close();showLogin('Account e magazzino personale eliminati. Ora puoi registrarti di nuovo con la stessa email.');
+ }catch(err){
+  const message=err?.code==='auth/wrong-password'||err?.code==='auth/invalid-credential'?'Password non corretta.':(err?.message||'Errore sconosciuto');
+  error.textContent='Eliminazione non completata: '+message+' Se alcune operazioni sono già state eseguite, contatta l’amministratore per verificare eventuali dati residui prima di riprovare.';
+ }finally{button.disabled=false;$('cancelDeleteAccount').disabled=false;$('deleteAccountPassword').value=''}
 };
