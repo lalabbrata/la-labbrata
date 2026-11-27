@@ -1,1 +1,24 @@
-{"name":"La Labbrata – Magazzino Birre","short_name":"La Labbrata","description":"Inventario e movimenti delle birre artigianali","start_url":"./index.html","scope":"./","display":"standalone","background_color":"#16120f","theme_color":"#211912","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{
+  "name": "BirraBox - Magazzino Birre",
+  "short_name": "BirraBox",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#042e2c",
+  "theme_color": "#042e2c",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
